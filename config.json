@@ -1,0 +1,87 @@
+{
+  "_readme": "日式清新版。TODO 开头的字段都是占位，换成你自己的。改完跑 python build.py 重新生成 standalone.html。",
+
+  "config": {
+    "name": "贪雀生",
+    "vipText": "",
+    "avatar": "avatar.jpg",
+    "albumCover": "album.jpg",
+    "background": "bg-tree.jpg",
+
+    "intro": "手好冷让我伸进你钱包暖暖",
+
+    "tags": [
+      { "text": "20" },
+      { "text": "intj" },
+      { "text": "三无" },
+      { "text": "雾山影 黑羊" }
+    ],
+
+    "gallery": [
+      { "img": "gallery/百合波点.jpg" },
+      { "img": "gallery/眼睛.jpg" },
+      { "img": "gallery/琴键拼贴.jpg" },
+      { "img": "gallery/水中白花.jpg" }
+    ],
+
+    "weather": {
+      "mock": null,
+      "city": "哈尔滨",
+      "lat": 45.8038,
+      "lon": 126.5350
+    },
+
+    "profile": {
+      "title": "个人信息",
+      "lines": ["直球狗0.7", "温柔安抚系", "偶尔掉落重力系"]
+    },
+
+    "infoRows": [
+      { "title": "须知" },
+      { "title": "板评" },
+      { "title": "话术" }
+    ],
+
+    "nowPlaying": {
+      "cover": "https://picsum.photos/seed/now/200/200",
+      "title": "Once Upon a Time",
+      "artist": "降调 · 戴上耳机",
+      "src": "audio/once-upon-a-time.mp3"
+    },
+
+    "lyrics": [
+      { "time": "0:00", "text": "投币解锁人物" },
+      { "time": "0:05", "text": "我不是不接，我只是把单放生了，你们懂吗? 其实每一单有自己的生命，" },
+      { "time": "0:11", "text": "就像一棵草一棵树一样有枯荣，" },
+      { "time": "0:17", "text": "而我选择把他们还给大自然，不去占有它们，利用它们，" },
+      { "time": "0:24", "text": "因为我觉得尊重自然。保护自然是我们每个人的责任" }
+    ],
+
+    "tabs": {
+      "music": {
+        "label": "音乐",
+        "sections": []
+      },
+      "podcast": {
+        "label": "播客",
+        "bubble": "负三年老中医在线问诊",
+        "sections": [],
+        "circleImg": "pod-circle.jpg",
+        "frameLabel": "ROMANTIC TIME"
+      },
+      "notes": {
+        "label": "笔记",
+        "sections": ["TODO 笔记内容占位。\n可以多行。"]
+      }
+    },
+
+    "welcome": {
+      "eyebrow": "恐葬鱼腹，犹贪雀生",
+      "title": "贪雀生",
+      "body": "纵然情深似海有倾覆之险\n仍贪恋这片刻相伴 不舍放手",
+      "btn": "进入"
+    },
+
+    "motion": "True"
+  }
+}
