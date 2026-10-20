@@ -448,6 +448,42 @@ body{
   width:104px; height:104px; flex:none;
   transform:rotate(45deg);
 }
+/* ===== 图位：云端图片填充态 ===== */
+.bp-slot{ overflow:hidden }
+.bp-slot.hasimg{ border:none; background:#e9ecee; padding:0 }
+.bp-slot .bp-img{
+  position:absolute; inset:0; width:100%; height:100%;
+  object-fit:cover; border-radius:12px; display:block;
+}
+/* 菱形槽：外层 rotate(45deg)，内层反向旋转并放大到盖满对角线 */
+.bp-dia .bp-img{
+  inset:-25%; width:150%; height:150%;
+  transform:rotate(-45deg); border-radius:8px;
+}
+/* ===== 编辑模式（知道口令的人才看得到差别） ===== */
+body.edit-mode .bp-slot:not(.hasimg),
+body.edit-mode .wm-cir:not(.hasimg),
+body.edit-mode .wm-dia:not(.hasimg){
+  border-color:rgba(255,255,255,.98);
+  background:rgba(255,255,255,.34);
+}
+body:not(.edit-mode) .bp-slot:not(.hasimg),
+body:not(.edit-mode) .wm-cir:not(.hasimg),
+body:not(.edit-mode) .wm-dia:not(.hasimg){ cursor:default }
+body:not(.edit-mode) .bp-plus{ opacity:.5 }
+.cir-lb-acts{ display:flex; gap:10px; align-items:center }
+.cir-lb-del{
+  border:1px solid rgba(255,255,255,.45); background:rgba(229,72,77,.30); color:#fff;
+  border-radius:999px; padding:8px 20px; font-size:12.5px; cursor:pointer;
+  font-family:inherit; letter-spacing:.16em;
+}
+.edit-bar{
+  position:fixed; right:12px; bottom:78px; z-index:90; display:none;
+  border:1px solid rgba(255,255,255,.6); background:rgba(255,255,255,.24);
+  color:#2c3a30; border-radius:999px; padding:9px 18px; font-size:12.5px;
+  letter-spacing:.16em; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+  cursor:pointer; font-family:inherit;
+}
 /* ===== 话术：透明底菱形拼贴（顶部头像 + 错落空位 + 玻璃圆点缀） ===== */
 .wmsg-wrap{
   background:transparent; border-radius:10px; overflow:hidden; position:relative;
@@ -1260,6 +1296,7 @@ body{
 </div>
 
 <div id="toast"></div>
+<button class="edit-bar" id="editBar">退出编辑</button>
 
 <script>
 /* ============================================================
@@ -1380,15 +1417,22 @@ const DATA = /*__CONFIG__*/ {
       "body": "纵然情深似海有倾覆之险\n仍贪恋这片刻相伴 不舍放手",
       "btn": "进入"
     },
-    "motion": "True"
+    "motion": "True",
+    "supabase": {
+      "url": "https://udbtfhwmtlylkcolxmhf.supabase.co",
+      "anonKey": "sb_publishable_F0nSwoHFgsPRMh4n8HCBVg__M8lgts1",
+      "bucket": "slot-imgs",
+      "salt": "ps-2026",
+      "passHash": "85fa395a45a640648931364d05a835ec3b7fc683586e35984ddb6d1d4b696975"
+    }
   }
 };
 
 const $  = id => document.getElementById(id);
 const el = (t,c,h)=>{ const n=document.createElement(t); if(c)n.className=c; if(h!=null)n.innerHTML=h; return n; };
 const safe = s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
-const toast = m=>{ const t=$('toast'); t.textContent=m; t.classList.add('show');
-  clearTimeout(t._tm); t._tm=setTimeout(()=>t.classList.remove('show'),1800); };
+const toast = (m,ms)=>{ const t=$('toast'); t.textContent=m; t.classList.add('show');
+  clearTimeout(t._tm); t._tm=setTimeout(()=>t.classList.remove('show'), ms||1800); };
 
 /* ---------- 头像：值是「?」时渲染神秘问号，否则当图片 URL ---------- */
 function mysteryAvatar(){
@@ -2097,55 +2141,378 @@ function renderSongPage(c){
   /* 点唱片暂停/继续转动 */
   $('cd').onclick = ()=> $('cd').classList.toggle('paused');
 }
+/* ============================================================
+   云端图位：板评 / 话术共用
+   Cloud  = Supabase REST（纯 fetch，不引 SDK，国内更稳）
+   Slots  = 槽位身份 + 本机缓存 / 旧数据迁移
+   Edit   = 口令编辑模式
+   SlotUI = 填充 / 上传 / 灯箱 / 删除
+   没配 supabase 时整体降级为本机模式，不报错、不白屏
+   ============================================================ */
+const Cloud = (()=>{
+  let cfg=null, on=false, rows=null, flying=null, at=0, warned=false;
+  function init(c){
+    try{
+      cfg = (c && c.supabase) || null;
+      on = !!(cfg && cfg.url && cfg.anonKey && cfg.bucket);
+    }catch(e){ on=false; }
+  }
+  function ready(){ return on; }
+  function rows_(){ return rows || {}; }
+  function hdr(extra){
+    const h = { apikey:cfg.anonKey, Authorization:'Bearer '+cfg.anonKey };
+    if(extra) for(const k in extra) h[k] = extra[k];
+    return h;
+  }
+  async function go(url, opt, ms){
+    const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    let tm = null;
+    if(ctl) tm = setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, ms || 3500);
+    try{
+      const o = Object.assign({}, opt || {});
+      if(ctl) o.signal = ctl.signal;
+      return await fetch(url, o);
+    } finally { if(tm) clearTimeout(tm); }
+  }
+  function pubUrl(sid, rev){
+    return cfg.url + '/storage/v1/object/public/' + cfg.bucket + '/' + sid + '.jpg?v=' + (rev || 0);
+  }
+  /* 一次请求拉全部槽位；60 秒内复用；失败只提示一次 */
+  function ensure(force){
+    if(!on) return Promise.resolve({ ok:false, reason:'off' });
+    if(!force && rows && (Date.now() - at) < 60000) return Promise.resolve({ ok:true, rows:rows });
+    if(flying) return flying;
+    flying = (async ()=>{
+      try{
+        const r = await go(cfg.url + '/rest/v1/slot_images?select=page,key,ix,url,rev', { headers:hdr() }, 3500);
+        if(!r || !r.ok) throw new Error('HTTP ' + ((r && r.status) || '?'));
+        const arr = await r.json();
+        const m = {};
+        (arr || []).forEach(x=>{ m[x.page + '/' + x.key + '/' + x.ix] = { url:x.url, rev:x.rev || 0 }; });
+        rows = m; at = Date.now();
+        return { ok:true, rows:m };
+      }catch(e){
+        if(!warned){ warned = true; try{ toast('云端暂不可达，显示本机缓存'); }catch(x){} }
+        return { ok:false, reason:String((e && e.message) || e) };
+      } finally { flying = null; }
+    })();
+    return flying;
+  }
+  /* 覆盖写：路径固定，重传不产生垃圾文件 */
+  async function put(sid, blob){
+    const url = cfg.url + '/storage/v1/object/' + cfg.bucket + '/' + sid + '.jpg';
+    const opt = { method:'POST',
+      headers: hdr({ 'x-upsert':'true', 'cache-Control':'3600', 'Content-Type':'image/jpeg' }),
+      body: blob };
+    let r = await go(url, opt, 20000);
+    if(!r || !r.ok) r = await go(url, Object.assign({}, opt, { method:'PUT' }), 20000);
+    if(!r || !r.ok) throw new Error('上传失败 ' + ((r && r.status) || ''));
+    return true;
+  }
+  async function upsert(sid, url, rev){
+    const p = String(sid).split('/');
+    const body = [{ page:p[0], key:p[1], ix:parseInt(p[2],10), url:url, rev:rev || 0 }];
+    const r = await go(cfg.url + '/rest/v1/slot_images', {
+      method:'POST',
+      headers: hdr({ 'Content-Type':'application/json', 'Prefer':'resolution=merge-duplicates,return=representation' }),
+      body: JSON.stringify(body)
+    }, 8000);
+    if(!r || !r.ok) throw new Error('写入失败 ' + ((r && r.status) || ''));
+    try{ const a = await r.json(); return (a && a[0]) || null; }catch(e){ return null; }
+  }
+  async function drop(sid){
+    const p = String(sid).split('/');
+    try{ await go(cfg.url + '/storage/v1/object/' + cfg.bucket + '/' + sid + '.jpg', { method:'DELETE', headers:hdr() }, 8000); }catch(e){}
+    try{ await go(cfg.url + '/rest/v1/slot_images?page=eq.' + p[0] + '&key=eq.' + p[1] + '&ix=eq.' + p[2], { method:'DELETE', headers:hdr() }, 8000); }catch(e){}
+    if(rows) delete rows[sid];
+    return true;
+  }
+  return { init, ready, ensure, pubUrl, put, upsert, drop, rows:rows_ };
+})();
+
+const Slots = (()=>{
+  const KEY = 'slotimg:v1';
+  function read(){ try{ return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }catch(e){ return {}; } }
+  function write(o){ try{ localStorage.setItem(KEY, JSON.stringify(o)); }catch(e){} }
+  function id(page, key, ix){ return page + '/' + key + '/' + ix; }
+  function get(sid){ return read()[sid] || null; }
+  function set(sid, v){ const o = read(); o[sid] = v; write(o); }
+  function clear(sid){ const o = read(); delete o[sid]; write(o); }
+  /* 老版本存在 hsCir / hsDia2 里的图，一次性迁过来（老键保留不动） */
+  function migrateOnce(){
+    try{
+      if(localStorage.getItem(KEY)) return;
+      const o = {}, rd = k=>{ try{ return JSON.parse(localStorage.getItem(k) || '[]') || []; }catch(e){ return []; } };
+      rd('hsCir').forEach((u,i)=>{ if(u) o[id('huashu','cir',i)] = { url:u, rev:0, local:true }; });
+      rd('hsDia2').forEach((u,i)=>{ if(u) o[id('huashu','dia',i)] = { url:u, rev:0, local:true }; });
+      if(Object.keys(o).length) write(o);
+    }catch(e){}
+  }
+  return { id, read, get, set, clear, migrateOnce };
+})();
+
+const Edit = (()=>{
+  const FLAG = 'ps_edit_v1';
+  let on = false;
+  function isOn(){ return on; }
+  function store(){ try{ return (typeof sessionStorage !== 'undefined') ? sessionStorage : null; }catch(e){ return null; } }
+  function paint(){
+    try{ document.body.classList.toggle('edit-mode', on); }catch(e){}
+    try{ const b = $('editBar'); if(b) b.style.display = on ? 'block' : 'none'; }catch(e){}
+  }
+  async function verify(code){
+    try{
+      const s = (window.cfg && window.cfg.supabase) || null;
+      if(!s || !s.passHash) return false;
+      if(typeof crypto === 'undefined' || !crypto.subtle || typeof TextEncoder === 'undefined'){
+        toast('当前环境不支持编辑模式'); return false;
+      }
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode((s.salt || 'ps') + ':' + code));
+      const hex = Array.prototype.map.call(new Uint8Array(buf), b=>('0' + b.toString(16)).slice(-2)).join('');
+      return hex === String(s.passHash).toLowerCase();
+    }catch(e){ return false; }
+  }
+  function unlock(){
+    on = true;
+    const st = store(); try{ if(st) st.setItem(FLAG, '1'); }catch(e){}
+    paint(); toast('已进入编辑模式');
+  }
+  function lock(){
+    on = false;
+    const st = store(); try{ if(st) st.removeItem(FLAG); }catch(e){}
+    paint(); toast('已退出编辑模式');
+  }
+  function ask(){
+    if(typeof prompt !== 'function'){ toast('当前环境不支持编辑模式'); return; }
+    const code = prompt('请输入编辑口令');
+    if(code == null) return;
+    verify(code).then(ok=>{ ok ? unlock() : toast('口令不对'); });
+  }
+  function init(){
+    let want = false;
+    try{
+      if(typeof location !== 'undefined' && location.search && String(location.search).indexOf('edit=1') >= 0) want = true;
+      /* 把 ?edit=1 从地址栏抹掉，老板转给别人时不会带着编辑意图 */
+      if(want && typeof history !== 'undefined' && history.replaceState){
+        try{ history.replaceState({}, '', (typeof location !== 'undefined' ? (location.pathname || '') : '')); }catch(e){}
+      }
+    }catch(e){}
+    const st = store();
+    let saved = false; try{ saved = !!(st && st.getItem(FLAG)); }catch(e){}
+    if(want && !saved) setTimeout(()=>{ try{ ask(); }catch(e){} }, 700);
+    else if(saved) on = true;
+    try{ const b = $('editBar'); if(b) b.onclick = ()=> lock(); }catch(e){}
+    paint();
+  }
+  return { init, isOn, ask, lock, unlock };
+})();
+
+/* 上传前压缩：长边 ≤ max，JPEG。沙箱/异常时原样返回 */
+async function compressImage(file, max, q){
+  try{
+    let bmp = null;
+    if(typeof createImageBitmap === 'function'){ try{ bmp = await createImageBitmap(file); }catch(e){ bmp = null; } }
+    if(!bmp){
+      if(typeof Image === 'undefined') return file;
+      bmp = await new Promise((res, rej)=>{
+        const im = new Image();
+        im.onload = ()=> res(im);
+        im.onerror = rej;
+        im.src = URL.createObjectURL(file);
+      });
+    }
+    const w0 = bmp.width || 1, h0 = bmp.height || 1;
+    const sc = Math.min(1, (max || 1100) / Math.max(w0, h0));
+    const w = Math.max(1, Math.round(w0 * sc)), h = Math.max(1, Math.round(h0 * sc));
+    const cv = (typeof document !== 'undefined' && document.createElement) ? document.createElement('canvas') : null;
+    if(!cv) return file;
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext ? cv.getContext('2d') : null;
+    if(!ctx) return file;                       /* 无 canvas（如校验沙箱）→ 用原图 */
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);   /* JPEG 无透明，避免 PNG 变黑 */
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const blob = await new Promise(res=>{
+      if(cv.toBlob) cv.toBlob(res, 'image/jpeg', q || 0.8); else res(null);
+    });
+    return blob || file;
+  }catch(e){ return file; }
+}
+function toDataURL(blob){
+  return new Promise(res=>{
+    try{
+      const rd = new FileReader();
+      rd.onload = ()=> res(String(rd.result || ''));
+      rd.onerror = ()=> res('');
+      rd.readAsDataURL(blob);
+    }catch(e){ res(''); }
+  });
+}
+
+const SlotUI = (()=>{
+  let input = null, pend = null;
+  function inputEl(){
+    if(input) return input;
+    try{
+      input = document.createElement('input');
+      input.type = 'file'; input.accept = 'image/*'; input.style.display = 'none';
+      input.onchange = onPick;
+      if(document.body) document.body.appendChild(input);
+    }catch(e){ input = null; }
+    return input;
+  }
+  function fill(d, url){
+    try{
+      const box = d._inner || d;
+      box.innerHTML = '';
+      const im = el('img','bp-img'); im.src = url; im.alt = '';
+      try{ im.setAttribute('loading','lazy'); im.setAttribute('decoding','async'); }catch(e){}
+      box.appendChild(im);
+      d.classList.add('hasimg');
+      d._url = url;
+    }catch(e){}
+  }
+  function empty(d){
+    try{
+      const box = d._inner || d;
+      box.innerHTML = '';
+      box.appendChild(el('span','bp-plus','+'));
+      if(d._cap) box.appendChild(el('span','bp-cap','图片空位'));
+      d.classList.remove('hasimg');
+      d._url = '';
+    }catch(e){}
+  }
+  function openLb(src, d){
+    try{
+      const ov = el('div','cir-lightbox');
+      const im = el('img'); im.src = src; im.alt = '';
+      ov.appendChild(im);
+      if(Edit.isOn()){
+        const acts = el('div','cir-lb-acts');
+        const swap = el('button','cir-lb-swap','换一张');
+        const del  = el('button','cir-lb-del','删除');
+        acts.appendChild(swap); acts.appendChild(del);
+        ov.appendChild(acts);
+        swap.onclick = e=>{ e.stopPropagation(); ov.remove(); pick(d); };
+        del.onclick  = e=>{ e.stopPropagation(); ov.remove(); drop(d); };
+      }
+      ov.appendChild(el('div','cir-lb-tip','点任意处关闭'));
+      ov.onclick = ()=> ov.remove();
+      if(document.body) document.body.appendChild(ov);
+    }catch(e){}
+  }
+  function pick(d){
+    if(!Edit.isOn()) return;
+    pend = d;
+    const f = inputEl();
+    if(f && f.click) f.click();
+  }
+  async function drop(d){
+    const sid = d._slot;
+    try{
+      if(Cloud.ready() && sid) await Cloud.drop(sid);
+      if(sid) Slots.clear(sid);
+      empty(d);
+      toast('已删除');
+    }catch(e){ toast('删除失败'); }
+  }
+  async function onPick(){
+    const d = pend;
+    const f = input && input.files && input.files[0];
+    if(!d || !f){ if(input) input.value = ''; pend = null; return; }
+    try{
+      toast('上传中…');
+      const blob = await compressImage(f, 1100, 0.8);
+      const sid = d._slot;
+      if(Cloud.ready() && sid){
+        const rev = Date.now();
+        await Cloud.put(sid, blob);
+        const row = await Cloud.upsert(sid, Cloud.pubUrl(sid, rev), rev);
+        const url = (row && row.url) || Cloud.pubUrl(sid, rev);
+        Slots.set(sid, { url:url, rev:rev, local:false });
+        fill(d, url);
+        toast('已更新，其他人刷新即可看到');
+      }else{
+        const url = await toDataURL(blob);
+        if(sid) Slots.set(sid, { url:url, rev:0, local:true });
+        fill(d, url);
+        toast('云端未接通，已存在本机');
+      }
+    }catch(e){ toast('上传失败，请重试'); }
+    finally{ if(input) input.value = ''; pend = null; }
+  }
+  function tap(d){
+    if(d._url){ openLb(d._url, d); return; }
+    if(Edit.isOn()){ pick(d); return; }   /* 访客点空位：不响应 */
+  }
+  function walk(n, fn){
+    if(!n) return;
+    fn(n);
+    const ch = n.children || [];
+    for(let i = 0; i < ch.length; i++) walk(ch[i], fn);
+  }
+  /* 先按缓存秒开，再静默拉云端对齐 */
+  function sync(wrap){
+    const paint = ()=>{
+      const cache = Slots.read(), cloud = Cloud.rows();
+      walk(wrap, d=>{
+        if(!d._slot) return;
+        const c = cloud[d._slot];
+        if(c && c.url){                       /* 云里有 → 云说了算 */
+          Slots.set(d._slot, { url:c.url, rev:c.rev || 0, local:false });
+          if(d._url !== c.url) fill(d, c.url);
+          return;
+        }
+        const r = cache[d._slot];
+        if(r && r.local && r.url){ if(d._url !== r.url) fill(d, r.url); return; }
+        if(r) Slots.clear(d._slot);
+        if(d._url) empty(d);
+      });
+    };
+    paint();
+    try{ Cloud.ensure().then(res=>{ if(res && res.ok) paint(); }); }catch(e){}
+  }
+  return { fill, empty, openLb, pick, drop, tap, sync, walk };
+})();
+
 /* 板评：菱形+横幅+三块 拼贴空位（参考杂志拼版） */
 function buildBanping(){
   const w = el('div','bp-wrap');
   const r1 = el('div','bp-row');
-  r1.appendChild(bpSlot(150));
+  r1.appendChild(bpSlot(150, 0));
   const dw = el('div','bp-dia-wrap');
-  const dia = el('div','bp-slot bp-dia');
-  dia.appendChild(el('span','bp-plus','+'));
-  dia.appendChild(el('span','bp-cap','图片空位'));
+  const dia = bpSlot(104, 1); dia.classList.add('bp-dia');
   dw.appendChild(dia);
   r1.appendChild(dw);
-  r1.appendChild(bpSlot(150));
+  r1.appendChild(bpSlot(150, 2));
   w.appendChild(r1);
   const r2 = el('div','bp-row');
-  r2.appendChild(bpSlot(88));
+  r2.appendChild(bpSlot(88, 3));
   w.appendChild(r2);
   const r3 = el('div','bp-row');
-  r3.appendChild(bpSlot(118));
-  r3.appendChild(bpSlot(172));
-  r3.appendChild(bpSlot(118));
+  r3.appendChild(bpSlot(118, 4));
+  r3.appendChild(bpSlot(172, 5));
+  r3.appendChild(bpSlot(118, 6));
   w.appendChild(r3);
+  SlotUI.sync(w);
   return w;
 }
 /* 话术：白卡菱形拼贴 —— 顶部菱形头像（百合图），下方空位错落排开，可点上传 */
 function buildHuashu(){
   const w = el('div','wmsg-wrap');
   const R = el('div','wmsg-right');
-  /* 空位（菱形 + 圆形）：错落排开，全部可点上传自己的图 */
-  const file = el('input'); file.type='file'; file.accept='image/*'; file.style.display='none';
-  let cur = null;
-  const load = (key)=>{ try{ return JSON.parse(localStorage.getItem(key)||'[]') || []; }catch(e){ return []; } };
-  const mkSlot = (sp, cls, key, ix, saved)=>{
+  /* 空位（圆形 + 菱形）：错落排开，可上传（需编辑口令） */
+  const mkSlot = (sp, cls, key, ix)=>{
     const d = el('div', cls);
     d.style.width = d.style.height = sp.s + 'px';
     ['top','left','right','bottom'].forEach(k=>{ if(sp[k]!=null) d.style[k] = sp[k] + 'px'; });
     const inn = el('div','wm-in');
     inn.appendChild(el('span','bp-plus','+'));
     d.appendChild(inn);
-    if(saved[ix]){
-      inn.innerHTML = '';
-      const im = el('img'); im.src = saved[ix]; im.alt='';
-      inn.appendChild(im);
-      d.classList.add('hasimg');
-    }
-    d.onclick = ()=>{
-      const im = d.querySelector('img');
-      if(im){ openLb(im.src, { d, inn, key, ix }); return; }  /* 已有图 → 看大图 */
-      cur = { d, inn, key, ix }; file.click();                /* 空位 → 上传 */
-    };
+    d._inner = inn; d._cap = false;
+    d._slot = Slots.id('huashu', key, ix);
+    const rec = Slots.get(d._slot);
+    if(rec && rec.url) SlotUI.fill(d, rec.url);
+    d.onclick = ()=> SlotUI.tap(d);
     R.appendChild(d);
   };
   /* 玻璃圆：放大 + 可上传；传图后点开看大图 */
@@ -2159,18 +2526,7 @@ function buildHuashu(){
     { s:140, top:522, right:-10 },
     { s:122, bottom:56, left:24 },
     { s:142, bottom:2,  right:56 },
-  ].forEach((c,ix)=> mkSlot(c, 'wm-cir', 'hsCir', ix, load('hsCir')));
-  /* 灯箱：点已填图的空位 → 全屏看完整图片；点任意处关闭，「换一张」重新选图 */
-  const openLb = (src, slot)=>{
-    const ov = el('div','cir-lightbox');
-    const im = el('img'); im.src = src; im.alt='';
-    const swap = el('button','cir-lb-swap','换一张');
-    const tip = el('div','cir-lb-tip','点任意处关闭');
-    ov.appendChild(im); ov.appendChild(swap); ov.appendChild(tip);
-    ov.onclick = ()=> ov.remove();
-    swap.onclick = (e)=>{ e.stopPropagation(); ov.remove(); cur = slot; file.click(); };
-    document.body.appendChild(ov);
-  };
+  ].forEach((c,ix)=> mkSlot(c, 'wm-cir', 'cir', ix));
   /* 菱形空位：错落排开，同样可点上传 */
   [
     { s:122, top:-44,  right:-46 },
@@ -2181,35 +2537,21 @@ function buildHuashu(){
     { s:136, top:486,  left:180  },
     { s:112, bottom:-44, left:-26 },
     { s:130, bottom:-52, right:16 },
-  ].forEach((sp,ix)=> mkSlot(sp, 'wm-dia', 'hsDia2', ix, load('hsDia2')));
-  file.onchange = ()=>{
-    const f = file.files && file.files[0];
-    if(!f || !cur) return;
-    const t = cur;
-    const rd = new FileReader();
-    rd.onload = ()=>{
-      const url = String(rd.result||'');
-      t.inn.innerHTML = '';
-      const im = el('img'); im.src = url; im.alt='';
-      t.inn.appendChild(im);
-      t.d.classList.add('hasimg');
-      try{
-        const arr = load(t.key);
-        arr[t.ix] = url;
-        localStorage.setItem(t.key, JSON.stringify(arr));
-      }catch(e){}
-    };
-    rd.readAsDataURL(f);
-  };
+  ].forEach((sp,ix)=> mkSlot(sp, 'wm-dia', 'dia', ix));
   w.appendChild(R);
-  w.appendChild(file);
+  SlotUI.sync(w);
   return w;
 }
-function bpSlot(h){
+function bpSlot(h, ix){
   const d = el('div','bp-slot');
   d.style.height = h + 'px';
+  d._inner = d; d._cap = true;
+  d._slot = Slots.id('banping','slot',ix);
   d.appendChild(el('span','bp-plus','+'));
   d.appendChild(el('span','bp-cap','图片空位'));
+  const rec = Slots.get(d._slot);
+  if(rec && rec.url) SlotUI.fill(d, rec.url);
+  d.onclick = ()=> SlotUI.tap(d);
   return d;
 }
 function openSongPage(title){
@@ -2224,8 +2566,9 @@ function openSongPage(title){
   document.querySelector('#songPage .sp-left').style.display = (isBP || isHS) ? 'none' : '';
   const box = $('spLyrics');
   const list = box.querySelector('.sp-list');
-  const old = box.querySelector('.bp-wrap');
-  if(old) old.remove();
+  /* 板评 / 话术 两种容器都要清，否则反复打开会叠加 */
+  const olds = box.querySelectorAll('.bp-wrap,.wmsg-wrap');
+  if(olds && olds.forEach) olds.forEach(n=>{ try{ if(n.remove) n.remove(); }catch(e){} });
   if(isBP || isHS){
     if(list) list.style.display = 'none';
     box.insertBefore(isBP ? buildBanping() : buildHuashu(), box.firstChild);
@@ -2267,6 +2610,13 @@ async function boot(){
   }
   const cfg = (raw && raw.config) ? raw.config : (raw || {});
   window.cfg = cfg;
+  /* 云端图位：没配 supabase 就整体降级为本机模式 */
+  try{
+    Cloud.init(cfg);
+    Slots.migrateOnce();
+    Edit.init();
+    Cloud.ensure();      /* 开屏期间静默预热 */
+  }catch(e){}
 
   /* 每块独立渲染：任何一块挂了，不能连累后面的 */
   const step = (name, fn)=>{
